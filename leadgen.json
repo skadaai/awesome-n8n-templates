@@ -1,0 +1,511 @@
+{
+  "name": "AI Lead Generation & Enrichment (Outscraper + Gemini)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": ""
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.outscraper.com/maps/search-v3",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-KEY",
+              "value": "={{ $credentials.outscraperApi.apiKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "digital marketing agencies in San Francisco"
+            },
+            {
+              "name": "limit",
+              "value": "20"
+            },
+            {
+              "name": "language",
+              "value": "en"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "outscraper-api",
+      "name": "Outscraper API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "outscraperApi",
+          "name": "Outscraper API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data",
+        "options": {}
+      },
+      "id": "split-leads",
+      "name": "Split Into Items",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "company_name",
+              "name": "company_name",
+              "value": "={{ $json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "phone",
+              "name": "phone",
+              "value": "={{ $json.phone }}",
+              "type": "string"
+            },
+            {
+              "id": "website",
+              "name": "website",
+              "value": "={{ $json.site }}",
+              "type": "string"
+            },
+            {
+              "id": "address",
+              "name": "address",
+              "value": "={{ $json.full_address }}",
+              "type": "string"
+            },
+            {
+              "id": "rating",
+              "name": "rating",
+              "value": "={{ $json.rating }}",
+              "type": "number"
+            },
+            {
+              "id": "reviews",
+              "name": "reviews_count",
+              "value": "={{ $json.reviews }}",
+              "type": "number"
+            },
+            {
+              "id": "category",
+              "name": "category",
+              "value": "={{ $json.category }}",
+              "type": "string"
+            },
+            {
+              "id": "description",
+              "name": "description",
+              "value": "={{ $json.description }}",
+              "type": "string"
+            },
+            {
+              "id": "email",
+              "name": "email",
+              "value": "={{ $json.email }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "extract-data",
+      "name": "Extract Lead Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "queryAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [{\n    \"parts\": [{\n      \"text\": \"You are a lead qualification expert for B2B sales. Analyze this company and provide:\\n\\n1. QUALIFICATION SCORE (0-100): Rate how likely this company is to buy marketing automation services\\n2. KEY INSIGHTS: List 3 specific reasons for the score\\n3. PAIN POINTS: Identify 2-3 likely business challenges\\n4. DECISION MAKER: Suggest the most likely job title to contact\\n\\nCompany Details:\\n- Name: {{ $json.company_name }}\\n- Category: {{ $json.category }}\\n- Description: {{ $json.description }}\\n- Rating: {{ $json.rating }}\\n- Reviews: {{ $json.reviews_count }}\\n- Website: {{ $json.website }}\\n\\nFormat your response as JSON with these exact keys: qualification_score, key_insights, pain_points, decision_maker\"\n    }]\n  }]\n}",
+        "options": {}
+      },
+      "id": "gemini-qualify",
+      "name": "Gemini - Qualify Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        300
+      ],
+      "credentials": {
+        "queryAuth": {
+          "id": "geminiApi",
+          "name": "Gemini API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract the AI response and parse it\nconst aiResponse = $input.item.json.candidates[0].content.parts[0].text;\n\n// Try to extract JSON from the response\nlet qualificationData;\ntry {\n  // Remove markdown code blocks if present\n  const cleanedResponse = aiResponse.replace(/```json\\n?|```\\n?/g, '').trim();\n  qualificationData = JSON.parse(cleanedResponse);\n} catch (error) {\n  // Fallback if JSON parsing fails\n  qualificationData = {\n    qualification_score: 50,\n    key_insights: [\"Unable to parse AI response\"],\n    pain_points: [\"Analysis pending\"],\n    decision_maker: \"Marketing Director\"\n  };\n}\n\n// Get the original lead data from the previous node\nconst leadData = $('Extract Lead Data').item.json;\n\n// Combine everything\nreturn {\n  ...leadData,\n  qualification_score: qualificationData.qualification_score,\n  key_insights: Array.isArray(qualificationData.key_insights) ? qualificationData.key_insights.join('; ') : qualificationData.key_insights,\n  pain_points: Array.isArray(qualificationData.pain_points) ? qualificationData.pain_points.join('; ') : qualificationData.pain_points,\n  decision_maker: qualificationData.decision_maker\n};"
+      },
+      "id": "parse-qualification",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "queryAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [{\n    \"parts\": [{\n      \"text\": \"Write a personalized cold outreach message for this company. Keep it under 150 words, professional but conversational.\\n\\nCompany: {{ $json.company_name }}\\nDecision Maker Title: {{ $json.decision_maker }}\\nPain Points: {{ $json.pain_points }}\\nQualification Score: {{ $json.qualification_score }}/100\\n\\nOur Service: We provide AI-powered automation solutions that help businesses streamline operations and increase efficiency.\\n\\nMessage should:\\n- Reference their specific business\\n- Mention 1 pain point naturally\\n- Include a soft CTA (ask a question or suggest a quick call)\\n- Sign off with just [Your Name]\\n\\nReturn ONLY the message text, no subject line or extra formatting.\"\n    }]\n  }]\n}",
+        "options": {}
+      },
+      "id": "gemini-personalize",
+      "name": "Gemini - Personalize Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        300
+      ],
+      "credentials": {
+        "queryAuth": {
+          "id": "geminiApi",
+          "name": "Gemini API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract the personalized message\nconst messageResponse = $input.item.json.candidates[0].content.parts[0].text;\n\n// Get all the data from previous node\nconst leadData = $('Parse AI Response').item.json;\n\n// Add timestamp\nconst now = new Date();\nconst timestamp = now.toISOString();\n\n// Combine everything for final output\nreturn {\n  timestamp: timestamp,\n  company_name: leadData.company_name,\n  phone: leadData.phone || 'N/A',\n  email: leadData.email || 'N/A',\n  website: leadData.website || 'N/A',\n  address: leadData.address || 'N/A',\n  category: leadData.category || 'N/A',\n  rating: leadData.rating || 'N/A',\n  reviews_count: leadData.reviews_count || 0,\n  qualification_score: leadData.qualification_score,\n  decision_maker: leadData.decision_maker,\n  key_insights: leadData.key_insights,\n  pain_points: leadData.pain_points,\n  personalized_message: messageResponse.trim(),\n  status: leadData.qualification_score >= 70 ? 'Hot Lead' : leadData.qualification_score >= 50 ? 'Warm Lead' : 'Cold Lead'\n};"
+      },
+      "id": "prepare-output",
+      "name": "Prepare Final Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1780,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "Lead Database"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "company_name",
+              "displayName": "Company Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone",
+              "displayName": "Phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "website",
+              "displayName": "Website",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "address",
+              "displayName": "Address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "category",
+              "displayName": "Category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "rating",
+              "displayName": "Rating",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reviews_count",
+              "displayName": "Reviews Count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "qualification_score",
+              "displayName": "Qualification Score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "decision_maker",
+              "displayName": "Decision Maker",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "key_insights",
+              "displayName": "Key Insights",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "pain_points",
+              "displayName": "Pain Points",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "personalized_message",
+              "displayName": "Personalized Message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "google-sheets",
+      "name": "Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2000,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "googleSheetsAuth",
+          "name": "Google Sheets Account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Outscraper API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outscraper API": {
+      "main": [
+        [
+          {
+            "node": "Split Into Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Into Items": {
+      "main": [
+        [
+          {
+            "node": "Extract Lead Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Lead Data": {
+      "main": [
+        [
+          {
+            "node": "Gemini - Qualify Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini - Qualify Lead": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Response": {
+      "main": [
+        [
+          {
+            "node": "Gemini - Personalize Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini - Personalize Message": {
+      "main": [
+        [
+          {
+            "node": "Prepare Final Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Final Output": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2025-10-28T00:00:00.000Z",
+  "versionId": "1"
+}
