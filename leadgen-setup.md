@@ -177,6 +177,10 @@ Modify the Outscraper API node to target different niches:
 
 **Total**: ~$25-40/month for automated lead generation
 
----
+## Packaging This as a Service
 
-Need help? Feel free to reach out with any questions!
+**Offer to clients:**
+- "AI Lead Generation Package"
+- Price: $1,000-3,000/month
+- Include: Setup, custom search targeting, AI qualification tuning, Google Sheets dashboard, first month management
+- Upsells: CRM integration, email automation, additional niches/markets, LinkedIn outreach automation
