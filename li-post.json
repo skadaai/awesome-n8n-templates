@@ -1,0 +1,653 @@
+{
+  "name": "LinkedIn Content Automation (RSS + Gemini)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://feeds.feedburner.com/TechCrunch/",
+        "options": {}
+      },
+      "id": "rss-feed-1",
+      "name": "RSS Feed - TechCrunch",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1,
+      "position": [
+        460,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://www.theverge.com/rss/index.xml",
+        "options": {}
+      },
+      "id": "rss-feed-2",
+      "name": "RSS Feed - The Verge",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1,
+      "position": [
+        460,
+        400
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "merge-feeds",
+      "name": "Merge RSS Feeds",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-date",
+              "leftValue": "={{ $json.pubDate }}",
+              "rightValue": "={{ $now.minus({hours: 24}).toISO() }}",
+              "operator": {
+                "type": "dateTime",
+                "operation": "after",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "filter-recent",
+      "name": "Filter Last 24hrs",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "title",
+              "name": "article_title",
+              "value": "={{ $json.title }}",
+              "type": "string"
+            },
+            {
+              "id": "link",
+              "name": "article_link",
+              "value": "={{ $json.link }}",
+              "type": "string"
+            },
+            {
+              "id": "description",
+              "name": "article_description",
+              "value": "={{ $json.description }}",
+              "type": "string"
+            },
+            {
+              "id": "pubdate",
+              "name": "published_date",
+              "value": "={{ $json.pubDate }}",
+              "type": "string"
+            },
+            {
+              "id": "source",
+              "name": "source",
+              "value": "={{ $json.meta?.title || 'RSS Feed' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "extract-article-data",
+      "name": "Extract Article Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "queryAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [{\n    \"parts\": [{\n      \"text\": \"You are a LinkedIn content strategist. Analyze this article and determine if it's suitable for LinkedIn content for a B2B AI automation agency.\\n\\nArticle Title: {{ $json.article_title }}\\nDescription: {{ $json.article_description }}\\nSource: {{ $json.source }}\\n\\nEvaluate:\\n1. RELEVANCE SCORE (0-100): How relevant is this to B2B decision makers, technology, AI, automation, or business innovation?\\n2. ENGAGEMENT POTENTIAL (0-100): How likely is this to generate likes, comments, and shares on LinkedIn?\\n3. KEY TAKEAWAY: What's the main insight or lesson from this article?\\n4. TARGET AUDIENCE: Who should read this? (e.g., CEOs, Marketing Directors, Tech Leaders)\\n5. CONTENT ANGLE: What perspective should we take when posting about this?\\n\\nOnly recommend articles with BOTH scores above 60.\\n\\nFormat response as JSON with keys: relevance_score, engagement_potential, key_takeaway, target_audience, content_angle, recommended (boolean)\"\n    }]\n  }]\n}",
+        "options": {}
+      },
+      "id": "gemini-analyze",
+      "name": "Gemini - Analyze Article",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1340,
+        300
+      ],
+      "credentials": {
+        "queryAuth": {
+          "id": "geminiApi",
+          "name": "Gemini API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse AI response\nconst aiResponse = $input.item.json.candidates[0].content.parts[0].text;\n\nlet analysisData;\ntry {\n  const cleanedResponse = aiResponse.replace(/```json\\n?|```\\n?/g, '').trim();\n  analysisData = JSON.parse(cleanedResponse);\n} catch (error) {\n  // Fallback if parsing fails\n  analysisData = {\n    relevance_score: 0,\n    engagement_potential: 0,\n    key_takeaway: \"Unable to analyze\",\n    target_audience: \"General\",\n    content_angle: \"Informative\",\n    recommended: false\n  };\n}\n\n// Get article data\nconst articleData = $('Extract Article Data').item.json;\n\n// Combine everything\nreturn {\n  ...articleData,\n  relevance_score: analysisData.relevance_score,\n  engagement_potential: analysisData.engagement_potential,\n  key_takeaway: analysisData.key_takeaway,\n  target_audience: analysisData.target_audience,\n  content_angle: analysisData.content_angle,\n  recommended: analysisData.recommended\n};"
+      },
+      "id": "parse-analysis",
+      "name": "Parse Analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-recommended",
+              "leftValue": "={{ $json.recommended }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "check-relevance",
+              "leftValue": "={{ $json.relevance_score }}",
+              "rightValue": 60,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "filter-recommended",
+      "name": "Filter Recommended Only",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [
+        1780,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "queryAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [{\n    \"parts\": [{\n      \"text\": \"Create an engaging LinkedIn post based on this article. The post is for a B2B AI automation agency.\\n\\nArticle Title: {{ $json.article_title }}\\nKey Takeaway: {{ $json.key_takeaway }}\\nTarget Audience: {{ $json.target_audience }}\\nContent Angle: {{ $json.content_angle }}\\nArticle Link: {{ $json.article_link }}\\n\\nRequirements:\\n- Hook: Start with an attention-grabbing first line\\n- Length: 150-200 words (LinkedIn optimal)\\n- Value: Share insights, not just news\\n- Tone: Professional but conversational, thought-provoking\\n- Structure: Short paragraphs (2-3 lines max)\\n- CTA: End with a question or call-to-action to drive engagement\\n- Include 3-5 relevant hashtags\\n- Credit the source naturally\\n- DO NOT use emojis\\n\\nReturn ONLY the post text, ready to copy-paste.\"\n    }]\n  }]\n}",
+        "options": {}
+      },
+      "id": "gemini-create-post",
+      "name": "Gemini - Create LinkedIn Post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2000,
+        300
+      ],
+      "credentials": {
+        "queryAuth": {
+          "id": "geminiApi",
+          "name": "Gemini API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "queryAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [{\n    \"parts\": [{\n      \"text\": \"Based on this article and LinkedIn post, suggest the optimal posting time and date.\\n\\nArticle: {{ $json.article_title }}\\nTarget Audience: {{ $json.target_audience }}\\nEngagement Potential: {{ $json.engagement_potential }}/100\\n\\nConsider:\\n- Current date/time: {{ $now.toFormat('yyyy-MM-dd HH:mm') }}\\n- LinkedIn best practices (Tue-Thu, 8-10am or 12-1pm work hours)\\n- Content freshness (post within 24-48 hours of article)\\n- Audience availability\\n\\nProvide:\\n1. SUGGESTED_DATE: Date in format YYYY-MM-DD\\n2. SUGGESTED_TIME: Time in format HH:MM (24-hour)\\n3. REASONING: Brief explanation (one sentence)\\n\\nFormat as JSON with keys: suggested_date, suggested_time, reasoning\"\n    }]\n  }]\n}",
+        "options": {}
+      },
+      "id": "gemini-schedule",
+      "name": "Gemini - Suggest Schedule",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2000,
+        480
+      ],
+      "credentials": {
+        "queryAuth": {
+          "id": "geminiApi",
+          "name": "Gemini API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the post content\nconst postResponse = $('Gemini - Create LinkedIn Post').first().json.candidates[0].content.parts[0].text;\n\n// Get the schedule suggestion\nconst scheduleResponse = $input.item.json.candidates[0].content.parts[0].text;\n\nlet scheduleData;\ntry {\n  const cleanedSchedule = scheduleResponse.replace(/```json\\n?|```\\n?/g, '').trim();\n  scheduleData = JSON.parse(cleanedSchedule);\n} catch (error) {\n  // Default to tomorrow at 9am if parsing fails\n  const tomorrow = $now.plus({days: 1});\n  scheduleData = {\n    suggested_date: tomorrow.toFormat('yyyy-MM-dd'),\n    suggested_time: '09:00',\n    reasoning: 'Default schedule'\n  };\n}\n\n// Get all article data\nconst articleData = $('Filter Recommended Only').first().json;\n\n// Generate post ID for tracking\nconst postId = `POST_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;\n\n// Create final output\nreturn {\n  post_id: postId,\n  status: 'Draft',\n  scheduled_date: scheduleData.suggested_date,\n  scheduled_time: scheduleData.suggested_time,\n  scheduling_reason: scheduleData.reasoning,\n  post_content: postResponse.trim(),\n  article_title: articleData.article_title,\n  article_link: articleData.article_link,\n  source: articleData.source,\n  relevance_score: articleData.relevance_score,\n  engagement_potential: articleData.engagement_potential,\n  target_audience: articleData.target_audience,\n  key_takeaway: articleData.key_takeaway,\n  created_at: $now.toISO(),\n  posted_at: '',\n  performance_likes: '',\n  performance_comments: '',\n  performance_shares: '',\n  notes: ''\n};"
+      },
+      "id": "prepare-calendar-entry",
+      "name": "Prepare Calendar Entry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "LinkedIn Content Calendar"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "post_id",
+              "displayName": "Post ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "scheduled_date",
+              "displayName": "Scheduled Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "scheduled_time",
+              "displayName": "Scheduled Time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "post_content",
+              "displayName": "Post Content",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "article_title",
+              "displayName": "Article Title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "article_link",
+              "displayName": "Article Link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "Source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "relevance_score",
+              "displayName": "Relevance Score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "engagement_potential",
+              "displayName": "Engagement Potential",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "target_audience",
+              "displayName": "Target Audience",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "key_takeaway",
+              "displayName": "Key Takeaway",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "displayName": "Created At",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "posted_at",
+              "displayName": "Posted At",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "performance_likes",
+              "displayName": "Likes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "performance_comments",
+              "displayName": "Comments",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "performance_shares",
+              "displayName": "Shares",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "notes",
+              "displayName": "Notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "scheduling_reason",
+              "displayName": "Scheduling Reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "google-sheets-calendar",
+      "name": "Add to Content Calendar",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2440,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "googleSheetsAuth",
+          "name": "Google Sheets Account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "RSS Feed - TechCrunch",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Feed - The Verge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Feed - TechCrunch": {
+      "main": [
+        [
+          {
+            "node": "Merge RSS Feeds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Feed - The Verge": {
+      "main": [
+        [
+          {
+            "node": "Merge RSS Feeds",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge RSS Feeds": {
+      "main": [
+        [
+          {
+            "node": "Filter Last 24hrs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Last 24hrs": {
+      "main": [
+        [
+          {
+            "node": "Extract Article Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Article Data": {
+      "main": [
+        [
+          {
+            "node": "Gemini - Analyze Article",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini - Analyze Article": {
+      "main": [
+        [
+          {
+            "node": "Parse Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Analysis": {
+      "main": [
+        [
+          {
+            "node": "Filter Recommended Only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Recommended Only": {
+      "main": [
+        [
+          {
+            "node": "Gemini - Create LinkedIn Post",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Gemini - Suggest Schedule",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini - Create LinkedIn Post": {
+      "main": [
+        [
+          {
+            "node": "Prepare Calendar Entry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini - Suggest Schedule": {
+      "main": [
+        [
+          {
+            "node": "Prepare Calendar Entry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Calendar Entry": {
+      "main": [
+        [
+          {
+            "node": "Add to Content Calendar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2025-10-28T00:00:00.000Z",
+  "versionId": "1"
+}
