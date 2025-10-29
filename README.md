@@ -9,4 +9,8 @@ Free n8n templates for starting an AI agency.
 - [Setup Guide](https://github.com/skadaai/n8n-templates/blob/main/li-post-setup.md)
 - [JSON file](https://github.com/skadaai/n8n-templates/blob/main/li-post.json)
 
+## Customer Support Agent
+- [Setup Guide](https://github.com/skadaai/n8n-templates/blob/main/customer-support-setup.md)
+- [JSON file](https://github.com/skadaai/n8n-templates/blob/main/customer-support.json)
+
 _More coming soon..._
