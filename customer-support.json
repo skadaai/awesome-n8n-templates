@@ -1,0 +1,786 @@
+{
+  "name": "AI Customer Support Automation (Gmail + Gemini)",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "labelIds": [
+            "INBOX"
+          ],
+          "includeSpamTrash": false
+        },
+        "options": {}
+      },
+      "id": "gmail-trigger",
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        400
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "gmailAuth",
+          "name": "Gmail Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-sender",
+              "leftValue": "={{ $json.from }}",
+              "rightValue": "noreply",
+              "operator": {
+                "type": "string",
+                "operation": "notContains",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "check-auto-reply",
+              "leftValue": "={{ $json.subject }}",
+              "rightValue": "auto-reply|out of office|automatic reply",
+              "operator": {
+                "type": "string",
+                "operation": "notContainsRegex"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "filter-valid-emails",
+      "name": "Filter Valid Support Emails",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [
+        460,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ticket_id",
+              "name": "ticket_id",
+              "value": "={{ 'TICKET_' + $now.toFormat('yyyyMMdd') + '_' + $json.id.substring(0, 8) }}",
+              "type": "string"
+            },
+            {
+              "id": "customer_email",
+              "name": "customer_email",
+              "value": "={{ $json.from }}",
+              "type": "string"
+            },
+            {
+              "id": "customer_name",
+              "name": "customer_name",
+              "value": "={{ $json.from.split('<')[0].trim() || $json.from }}",
+              "type": "string"
+            },
+            {
+              "id": "subject",
+              "name": "subject",
+              "value": "={{ $json.subject }}",
+              "type": "string"
+            },
+            {
+              "id": "email_body",
+              "name": "email_body",
+              "value": "={{ $json.plainText || $json.snippet }}",
+              "type": "string"
+            },
+            {
+              "id": "received_at",
+              "name": "received_at",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            },
+            {
+              "id": "thread_id",
+              "name": "thread_id",
+              "value": "={{ $json.threadId }}",
+              "type": "string"
+            },
+            {
+              "id": "message_id",
+              "name": "message_id",
+              "value": "={{ $json.id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "extract-email-data",
+      "name": "Extract Email Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        680,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "queryAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [{\n    \"parts\": [{\n      \"text\": \"Analyze this customer support email and categorize it.\\n\\nFrom: {{ $json.customer_name }} <{{ $json.customer_email }}>\\nSubject: {{ $json.subject }}\\nMessage:\\n{{ $json.email_body }}\\n\\nProvide:\\n1. CATEGORY: Choose ONE from [Technical Issue, Billing Question, Feature Request, General Inquiry, Complaint, Account Issue, Product Question, Bug Report, Other]\\n2. PRIORITY: Choose ONE from [Low, Medium, High, Urgent]\\n3. SENTIMENT: Choose ONE from [Positive, Neutral, Negative, Very Negative]\\n4. COMPLEXITY: Choose ONE from [Simple, Moderate, Complex]\\n5. SUMMARY: One sentence summary of the issue (max 100 chars)\\n6. KEY_POINTS: List 2-3 main points from the email\\n7. SUGGESTED_ACTION: What should be done to resolve this?\\n\\nPriority Guidelines:\\n- Urgent: System down, data loss, security issue, angry customer\\n- High: Feature broken, billing error, multiple customers affected\\n- Medium: Single customer issue, feature question\\n- Low: General question, feature request, feedback\\n\\nComplexity Guidelines:\\n- Simple: Can be answered with existing knowledge, no technical steps\\n- Moderate: Requires some investigation or multi-step solution\\n- Complex: Needs specialist, custom solution, or development work\\n\\nFormat response as JSON with keys: category, priority, sentiment, complexity, summary, key_points (array), suggested_action\"\n    }]\n  }]\n}",
+        "options": {}
+      },
+      "id": "gemini-categorize",
+      "name": "Gemini - Categorize Ticket",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        400
+      ],
+      "credentials": {
+        "queryAuth": {
+          "id": "geminiApi",
+          "name": "Gemini API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse AI categorization\nconst aiResponse = $input.item.json.candidates[0].content.parts[0].text;\n\nlet categorization;\ntry {\n  const cleanedResponse = aiResponse.replace(/```json\\n?|```\\n?/g, '').trim();\n  categorization = JSON.parse(cleanedResponse);\n} catch (error) {\n  // Fallback\n  categorization = {\n    category: 'General Inquiry',\n    priority: 'Medium',\n    sentiment: 'Neutral',\n    complexity: 'Moderate',\n    summary: 'Unable to categorize',\n    key_points: ['Manual review needed'],\n    suggested_action: 'Review manually'\n  };\n}\n\n// Get email data\nconst emailData = $('Extract Email Data').item.json;\n\n// Combine\nreturn {\n  ...emailData,\n  category: categorization.category,\n  priority: categorization.priority,\n  sentiment: categorization.sentiment,\n  complexity: categorization.complexity,\n  summary: categorization.summary,\n  key_points: Array.isArray(categorization.key_points) ? categorization.key_points.join('; ') : categorization.key_points,\n  suggested_action: categorization.suggested_action\n};"
+      },
+      "id": "parse-categorization",
+      "name": "Parse Categorization",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "driveId": {
+          "__rl": true,
+          "value": "My Drive",
+          "mode": "list",
+          "cachedResultName": "My Drive"
+        },
+        "queryString": "=name contains 'support' or name contains 'help' or name contains 'faq' or name contains 'documentation' or fullText contains '{{ $json.category.toLowerCase() }}'",
+        "options": {
+          "fields": [
+            "id",
+            "name",
+            "mimeType",
+            "webViewLink"
+          ]
+        }
+      },
+      "id": "search-knowledge-base",
+      "name": "Search Knowledge Base",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1340,
+        400
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "googleDriveAuth",
+          "name": "Google Drive Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": "id"
+        },
+        "options": {
+          "googleFileConversion": {
+            "conversion": {
+              "docsToFormat": "text/plain"
+            }
+          }
+        }
+      },
+      "id": "download-docs",
+      "name": "Download Knowledge Docs",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1560,
+        400
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "googleDriveAuth",
+          "name": "Google Drive Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate all knowledge base content\nconst allDocs = $input.all();\n\nlet knowledgeContent = '';\nlet docsList = [];\n\nfor (const doc of allDocs) {\n  if (doc.json.data) {\n    // Convert binary data to text\n    const content = doc.json.data.toString('utf-8');\n    knowledgeContent += `\\n\\n--- Document: ${doc.json.fileName || 'Unknown'} ---\\n${content.substring(0, 3000)}`;\n    docsList.push(doc.json.fileName || 'Unknown');\n  }\n}\n\n// Get the ticket data from earlier node\nconst ticketData = $('Parse Categorization').first().json;\n\nreturn {\n  ...ticketData,\n  knowledge_base_content: knowledgeContent || 'No relevant documentation found',\n  knowledge_base_docs: docsList.join(', ') || 'None'\n};"
+      },
+      "id": "aggregate-knowledge",
+      "name": "Aggregate Knowledge",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1780,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "queryAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [{\n    \"parts\": [{\n      \"text\": \"You are a helpful customer support agent. Generate a response to this customer email.\\n\\nCustomer Email:\\nFrom: {{ $json.customer_name }}\\nSubject: {{ $json.subject }}\\nMessage: {{ $json.email_body }}\\n\\nTicket Details:\\n- Category: {{ $json.category }}\\n- Priority: {{ $json.priority }}\\n- Complexity: {{ $json.complexity }}\\n- Key Points: {{ $json.key_points }}\\n\\nKnowledge Base Information:\\n{{ $json.knowledge_base_content }}\\n\\nInstructions:\\n1. Be friendly, professional, and empathetic\\n2. Address all key points from their email\\n3. Use information from the knowledge base when relevant\\n4. If you can fully answer the question with confidence, provide a complete solution\\n5. If the issue is complex or requires more info, acknowledge it and explain what you need\\n6. Keep response under 300 words\\n7. End with a clear call-to-action or next steps\\n8. Sign off as 'The Support Team'\\n\\nProvide TWO things:\\n1. RESPONSE: The actual email response text\\n2. CONFIDENCE: Rate 0-100 how confident you are this fully resolves their issue\\n\\nFormat as JSON with keys: response, confidence\"\n    }]\n  }]\n}",
+        "options": {}
+      },
+      "id": "gemini-generate-response",
+      "name": "Gemini - Generate Response",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2000,
+        400
+      ],
+      "credentials": {
+        "queryAuth": {
+          "id": "geminiApi",
+          "name": "Gemini API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse AI response\nconst aiResponse = $input.item.json.candidates[0].content.parts[0].text;\n\nlet responseData;\ntry {\n  const cleanedResponse = aiResponse.replace(/```json\\n?|```\\n?/g, '').trim();\n  responseData = JSON.parse(cleanedResponse);\n} catch (error) {\n  responseData = {\n    response: \"Thank you for contacting us. We've received your message and will get back to you shortly.\",\n    confidence: 30\n  };\n}\n\n// Get ticket data\nconst ticketData = $('Aggregate Knowledge').item.json;\n\n// Determine if this should be auto-sent or drafted\n// Auto-send criteria: Simple complexity AND high confidence (>75) AND not Urgent priority\nconst shouldAutoSend = \n  ticketData.complexity === 'Simple' && \n  responseData.confidence > 75 && \n  ticketData.priority !== 'Urgent';\n\nreturn {\n  ...ticketData,\n  response_text: responseData.response,\n  confidence_score: responseData.confidence,\n  auto_send: shouldAutoSend,\n  status: shouldAutoSend ? 'Auto-Responded' : 'Pending Review'\n};"
+      },
+      "id": "parse-response",
+      "name": "Parse Response & Decide Action",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2220,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-auto-send",
+              "leftValue": "={{ $json.auto_send }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "route-auto-or-draft",
+      "name": "Route: Auto-Send or Draft?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2440,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.customer_email }}",
+        "subject": "=Re: {{ $json.subject }}",
+        "message": "={{ $json.response_text }}",
+        "options": {
+          "replyToSenderAndMentions": true,
+          "threadId": "={{ $json.thread_id }}"
+        }
+      },
+      "id": "gmail-auto-send",
+      "name": "Gmail - Auto Send",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2660,
+        300
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "gmailAuth",
+          "name": "Gmail Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "messageLabelIds": [
+          "DRAFT"
+        ],
+        "subject": "=Re: {{ $json.subject }}",
+        "message": "={{ $json.response_text }}",
+        "options": {
+          "replyToSenderAndMentions": true,
+          "threadId": "={{ $json.thread_id }}",
+          "to": "={{ $json.customer_email }}"
+        }
+      },
+      "id": "gmail-create-draft",
+      "name": "Gmail - Create Draft",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2660,
+        500
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "gmailAuth",
+          "name": "Gmail Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "Support Tickets"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "ticket_id",
+              "displayName": "Ticket ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "received_at",
+              "displayName": "Received At",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "customer_name",
+              "displayName": "Customer Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "customer_email",
+              "displayName": "Customer Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "subject",
+              "displayName": "Subject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "category",
+              "displayName": "Category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "priority",
+              "displayName": "Priority",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sentiment",
+              "displayName": "Sentiment",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "complexity",
+              "displayName": "Complexity",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "summary",
+              "displayName": "Summary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "key_points",
+              "displayName": "Key Points",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "suggested_action",
+              "displayName": "Suggested Action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "response_text",
+              "displayName": "Response Text",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "confidence_score",
+              "displayName": "Confidence Score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "knowledge_base_docs",
+              "displayName": "KB Docs Used",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "auto_send",
+              "displayName": "Auto Sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "resolved_at",
+              "displayName": "Resolved At",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "notes",
+              "displayName": "Notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "google-sheets-log",
+      "name": "Log to Support Tracker",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2660,
+        700
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "googleSheetsAuth",
+          "name": "Google Sheets Account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "merge-paths",
+      "name": "Merge Paths",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [
+        2880,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Filter Valid Support Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Valid Support Emails": {
+      "main": [
+        [
+          {
+            "node": "Extract Email Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Email Data": {
+      "main": [
+        [
+          {
+            "node": "Gemini - Categorize Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini - Categorize Ticket": {
+      "main": [
+        [
+          {
+            "node": "Parse Categorization",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Categorization": {
+      "main": [
+        [
+          {
+            "node": "Search Knowledge Base",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Knowledge Base": {
+      "main": [
+        [
+          {
+            "node": "Download Knowledge Docs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Knowledge Docs": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Knowledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Knowledge": {
+      "main": [
+        [
+          {
+            "node": "Gemini - Generate Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini - Generate Response": {
+      "main": [
+        [
+          {
+            "node": "Parse Response & Decide Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Response & Decide Action": {
+      "main": [
+        [
+          {
+            "node": "Route: Auto-Send or Draft?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log to Support Tracker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route: Auto-Send or Draft?": {
+      "main": [
+        [
+          {
+            "node": "Gmail - Auto Send",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gmail - Create Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail - Auto Send": {
+      "main": [
+        [
+          {
+            "node": "Merge Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail - Create Draft": {
+      "main": [
+        [
+          {
+            "node": "Merge Paths",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Log to Support Tracker": {
+      "main": [
+        [
+          {
+            "node": "Merge Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2025-10-29T00:00:00.000Z",
+  "versionId": "1"
+}
