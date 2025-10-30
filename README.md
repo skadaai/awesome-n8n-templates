@@ -1,4 +1,4 @@
-# n8n Templates by Skada
+# Awesome n8n Templates by Skada
 Free n8n templates for starting an AI agency.
 
 ## Lead Generation Agent
